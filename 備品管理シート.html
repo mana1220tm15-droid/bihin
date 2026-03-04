@@ -164,6 +164,75 @@ tr:hover td { background:#f8fafc; }
 input[type="radio"]:checked + span { color:var(--primary); }
 label:has(input[type="radio"]:checked) { border-color:var(--primary) !important; background:#eff6ff !important; }
 
+/* ===== ギャラリーモーダル ===== */
+.gallery-overlay {
+  position:fixed; inset:0; background:rgba(0,0,0,0.92);
+  z-index:9999; display:flex; flex-direction:column;
+  align-items:center; padding:20px; overflow-y:auto;
+  opacity:0; pointer-events:none; transition:opacity .2s;
+}
+.gallery-overlay.active { opacity:1; pointer-events:all; }
+.gallery-header {
+  width:100%; max-width:900px; display:flex;
+  justify-content:space-between; align-items:center;
+  margin-bottom:16px; flex-shrink:0;
+}
+.gallery-title { color:white; font-size:18px; font-weight:700; }
+.gallery-close {
+  background:rgba(255,255,255,0.15); border:none; color:white;
+  padding:8px 16px; border-radius:8px; cursor:pointer; font-size:14px;
+}
+.gallery-grid {
+  width:100%; max-width:900px;
+  display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr));
+  gap:12px;
+}
+.gallery-card {
+  background:#1e1e2e; border-radius:10px; overflow:hidden;
+  cursor:pointer; transition:transform .15s;
+  border:2px solid transparent;
+}
+.gallery-card:hover { transform:scale(1.02); border-color:#4a90d9; }
+.gallery-card .gc-thumb {
+  width:100%; aspect-ratio:4/3; object-fit:cover; display:block;
+}
+.gallery-card .gc-pdf {
+  width:100%; aspect-ratio:4/3; display:flex; flex-direction:column;
+  align-items:center; justify-content:center;
+  background:linear-gradient(145deg,#2a1a1a,#3a1a1a); gap:6px;
+}
+.gc-pdf .gc-pdf-icon { font-size:2.5rem; }
+.gc-pdf .gc-pdf-label { font-size:.7rem; font-weight:bold; color:#f87171; letter-spacing:1px; }
+.gc-pdf .gc-pdf-name { font-size:.65rem; color:#aaa; padding:0 8px; text-align:center;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; width:100%; }
+.gallery-card .gc-info {
+  padding:8px 10px; font-size:11px; color:#aaa;
+  display:flex; justify-content:space-between; align-items:center;
+}
+.gc-num { background:#4a90d9; color:white; font-size:10px; font-weight:bold;
+  padding:1px 6px; border-radius:8px; }
+
+/* ファイル拡大表示 */
+.file-viewer-overlay {
+  position:fixed; inset:0; background:rgba(0,0,0,0.95);
+  z-index:10000; display:flex; flex-direction:column;
+  align-items:center; justify-content:center; padding:20px;
+  opacity:0; pointer-events:none; transition:opacity .15s;
+}
+.file-viewer-overlay.active { opacity:1; pointer-events:all; }
+.file-viewer-nav {
+  display:flex; align-items:center; gap:16px; margin-bottom:12px;
+}
+.fv-btn {
+  background:rgba(255,255,255,0.15); border:none; color:white;
+  width:40px; height:40px; border-radius:50%; cursor:pointer;
+  font-size:18px; display:flex; align-items:center; justify-content:center;
+  transition:background .15s;
+}
+.fv-btn:hover { background:rgba(255,255,255,0.3); }
+.fv-btn:disabled { opacity:0.3; cursor:not-allowed; }
+.fv-counter { color:white; font-size:13px; min-width:60px; text-align:center; }
+
 /* ===== 期日アラートバッジ ===== */
 .date-badge {
   display:inline-flex; align-items:center; gap:3px;
@@ -277,6 +346,27 @@ label:has(input[type="radio"]:checked) { border-color:var(--primary) !important;
   <div id="tableView" class="table-wrap hidden">
     <table><thead id="tableHead"></thead><tbody id="tableBody"></tbody></table>
   </div>
+</div>
+
+<!-- ギャラリーモーダル -->
+<div class="gallery-overlay" id="galleryOverlay">
+  <div class="gallery-header">
+    <div class="gallery-title" id="galleryTitle">📎 添付ファイル</div>
+    <button class="gallery-close" onclick="closeGallery()">✕ 閉じる</button>
+  </div>
+  <div class="gallery-grid" id="galleryGrid"></div>
+</div>
+
+<!-- ファイル拡大表示 -->
+<div class="file-viewer-overlay" id="fileViewerOverlay">
+  <div class="file-viewer-nav">
+    <button class="fv-btn" id="fvPrev" onclick="fvNavigate(-1)">‹</button>
+    <span class="fv-counter" id="fvCounter">1 / 1</span>
+    <button class="fv-btn" id="fvNext" onclick="fvNavigate(1)">›</button>
+  </div>
+  <div id="fvContent" style="max-width:90vw;max-height:80vh;display:flex;align-items:center;justify-content:center;"></div>
+  <div id="fvName" style="color:white;font-size:13px;margin-top:10px;color:#aaa;"></div>
+  <button onclick="closeFileViewer()" style="margin-top:14px;background:rgba(255,255,255,0.15);border:none;color:white;padding:8px 20px;border-radius:8px;cursor:pointer;font-size:13px;">✕ 閉じる</button>
 </div>
 
 <!-- 追加・編集モーダル -->
@@ -817,14 +907,20 @@ function renderTableView(){
   tbody.innerHTML=filtered.map(item=>{
     const meta=CAT_META[item.category]||{};
     const hasMemo=item.memo&&item.memo.trim()!=='';
-    const displayImg=(item.files&&item.files.length>0&&item.files[0].type==='image')?item.files[0].dataUrl:(item.image||'');
-    const fileCount=(item.files&&item.files.length>0)?item.files.length:0;
     return `<tr>
       <td style="text-align:center;">
-        ${displayImg?`<div style="position:relative;display:inline-block;">
-          <img src="${displayImg}" style="width:40px;height:40px;object-fit:cover;border-radius:6px;border:1px solid var(--border);cursor:pointer;" onclick="viewImage('${displayImg}','${item.name}')" title="クリックで拡大">
-          ${fileCount>1?`<span style="position:absolute;bottom:-4px;right:-4px;background:#4a90d9;color:white;font-size:9px;font-weight:bold;padding:1px 4px;border-radius:8px;">+${fileCount-1}</span>`:''}
-        </div>`:'<span style="font-size:24px;">📷</span>'}
+        ${(item.files&&item.files.length>0)||item.image ? `
+          <div style="position:relative;display:inline-block;cursor:pointer;" onclick="openGallery(${item.id})" title="クリックで全ファイルを表示">
+            ${(()=>{
+              const firstImg=(item.files&&item.files.length>0&&item.files[0].type==='image')?item.files[0].dataUrl:
+                             (item.files&&item.files.length>0&&item.files[0].type==='pdf')?null:item.image;
+              const fileCount=(item.files&&item.files.length>0)?item.files.length:1;
+              return firstImg
+                ? `<img src="${firstImg}" style="width:40px;height:40px;object-fit:cover;border-radius:6px;border:1px solid var(--border);">`
+                : `<div style="width:40px;height:40px;border-radius:6px;border:1px solid #f5c6c6;background:#fff0f0;display:flex;align-items:center;justify-content:center;font-size:20px;">📄</div>`;
+            })()}
+            ${(item.files&&item.files.length>1)?`<span style="position:absolute;bottom:-4px;right:-4px;background:#4a90d9;color:white;font-size:9px;font-weight:bold;padding:1px 4px;border-radius:8px;">+${item.files.length-1}</span>`:''}
+          </div>` : '<span style="font-size:24px;color:#ccc;">📷</span>'}
       </td>
       <td style="text-align:center;">${hasMemo?'<span style="display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:700;color:#dc2626;background:#fef2f2;border:1px solid #fecaca;border-radius:4px;padding:2px 6px;white-space:nowrap;">📝 メモ有</span>':''}</td>
       <td><strong>${item.name}</strong></td>
@@ -1136,22 +1232,135 @@ function openLendHistoryModal(){
 
 function closeLendHistoryModal(){document.getElementById('lendHistoryModal').classList.remove('active');}
 
-// ── 画像表示 ──
+// ── ギャラリー表示 ──
+let galleryFiles=[];
+let fvIndex=0;
+
+function openGallery(itemId){
+  const item=data.find(d=>d.id===itemId);
+  if(!item) return;
+  // filesがあればそちら優先、なければ旧imageフィールド
+  const files=(item.files&&item.files.length>0)
+    ? item.files
+    : (item.image?[{name:'image.jpg',dataUrl:item.image,type:'image'}]:[]);
+  if(files.length===0) return;
+  galleryFiles=files;
+
+  document.getElementById('galleryTitle').textContent=`📎 ${item.name} の添付ファイル（${files.length}件）`;
+  const grid=document.getElementById('galleryGrid');
+  grid.innerHTML=files.map((f,i)=>{
+    if(f.type==='pdf'){
+      const shortName=(f.name||'').length>20?(f.name||'').slice(0,18)+'…':(f.name||'PDF');
+      return `<div class="gallery-card" onclick="openFileViewer(${i})">
+        <div class="gc-pdf">
+          <span class="gc-pdf-icon">📄</span>
+          <span class="gc-pdf-label">PDF</span>
+          <span class="gc-pdf-name">${shortName}</span>
+        </div>
+        <div class="gc-info">
+          <span>${shortName}</span>
+          <span class="gc-num">${i+1}</span>
+        </div>
+      </div>`;
+    }else{
+      return `<div class="gallery-card" onclick="openFileViewer(${i})">
+        <img class="gc-thumb" src="${f.dataUrl}" alt="${f.name||'画像'}">
+        <div class="gc-info">
+          <span>${(f.name||'画像').length>16?(f.name||'画像').slice(0,14)+'…':(f.name||'画像')}</span>
+          <span class="gc-num">${i+1}</span>
+        </div>
+      </div>`;
+    }
+  }).join('');
+  document.getElementById('galleryOverlay').classList.add('active');
+}
+
+function closeGallery(){
+  document.getElementById('galleryOverlay').classList.remove('active');
+}
+
+// ── ファイル拡大表示（前後ナビ付き）──
+function openFileViewer(index){
+  fvIndex=index;
+  renderFileViewer();
+  document.getElementById('fileViewerOverlay').classList.add('active');
+}
+
+function closeFileViewer(){
+  document.getElementById('fileViewerOverlay').classList.remove('active');
+}
+
+function fvNavigate(delta){
+  fvIndex=Math.max(0,Math.min(galleryFiles.length-1,fvIndex+delta));
+  renderFileViewer();
+}
+
+function renderFileViewer(){
+  const f=galleryFiles[fvIndex];
+  const content=document.getElementById('fvContent');
+  const counter=document.getElementById('fvCounter');
+  const name=document.getElementById('fvName');
+  const prev=document.getElementById('fvPrev');
+  const next=document.getElementById('fvNext');
+
+  counter.textContent=`${fvIndex+1} / ${galleryFiles.length}`;
+  prev.disabled=fvIndex===0;
+  next.disabled=fvIndex===galleryFiles.length-1;
+  name.textContent=f.name||'';
+
+  if(f.type==='pdf'){
+    // PDFはbase64をblobに変換してiframeで表示
+    content.innerHTML='';
+    try{
+      const base64=f.dataUrl.split(',')[1];
+      const binary=atob(base64);
+      const bytes=new Uint8Array(binary.length);
+      for(let i=0;i<binary.length;i++) bytes[i]=binary.charCodeAt(i);
+      const blob=new Blob([bytes],{type:'application/pdf'});
+      const url=URL.createObjectURL(blob);
+      const iframe=document.createElement('iframe');
+      iframe.src=url;
+      iframe.style.cssText='width:85vw;height:75vh;border:none;border-radius:8px;background:white;';
+      content.appendChild(iframe);
+    }catch(e){
+      content.innerHTML=`<div style="color:white;text-align:center;padding:40px;">
+        <div style="font-size:60px;margin-bottom:16px;">📄</div>
+        <div style="font-size:16px;margin-bottom:12px;">${f.name||'PDF'}</div>
+        <button onclick="downloadFile(${fvIndex})" style="background:#4a90d9;color:white;border:none;padding:10px 20px;border-radius:8px;cursor:pointer;font-size:14px;">⬇️ ダウンロードして開く</button>
+      </div>`;
+    }
+  }else{
+    content.innerHTML=`<img src="${f.dataUrl}" style="max-width:85vw;max-height:75vh;border-radius:8px;box-shadow:0 8px 32px rgba(0,0,0,0.6);object-fit:contain;">`;
+  }
+}
+
+function downloadFile(index){
+  const f=galleryFiles[index];
+  const a=document.createElement('a');
+  a.href=f.dataUrl;
+  a.download=f.name||'file.pdf';
+  a.click();
+}
+
+// キーボード操作（←→で前後移動、Escで閉じる）
+document.addEventListener('keydown',e=>{
+  const fv=document.getElementById('fileViewerOverlay');
+  const gl=document.getElementById('galleryOverlay');
+  if(fv.classList.contains('active')){
+    if(e.key==='ArrowLeft') fvNavigate(-1);
+    if(e.key==='ArrowRight') fvNavigate(1);
+    if(e.key==='Escape') closeFileViewer();
+  }else if(gl.classList.contains('active')){
+    if(e.key==='Escape') closeGallery();
+  }
+});
+
 function viewImage(imageData,name){
-  const overlay=document.createElement('div');
-  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.9);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;cursor:pointer;';
-  overlay.onclick=()=>document.body.removeChild(overlay);
-  const img=document.createElement('img');
-  img.src=imageData;
-  img.style.cssText='max-width:90%;max-height:85vh;border-radius:8px;box-shadow:0 8px 32px rgba(0,0,0,0.6);';
-  const title=document.createElement('div');
-  title.textContent=name;
-  title.style.cssText='color:white;font-size:18px;font-weight:700;margin-top:16px;';
-  const closeBtn=document.createElement('div');
-  closeBtn.textContent='✕ 閉じる';
-  closeBtn.style.cssText='color:white;font-size:14px;margin-top:12px;padding:8px 16px;background:rgba(255,255,255,0.2);border-radius:8px;';
-  overlay.appendChild(img);overlay.appendChild(title);overlay.appendChild(closeBtn);
-  document.body.appendChild(overlay);
+  // 後方互換性のため残す（旧コードから呼ばれる場合）
+  galleryFiles=[{name,dataUrl:imageData,type:'image'}];
+  fvIndex=0;
+  renderFileViewer();
+  document.getElementById('fileViewerOverlay').classList.add('active');
 }
 
 /* ================================================================

@@ -163,6 +163,37 @@ tr:hover td { background:#f8fafc; }
 
 input[type="radio"]:checked + span { color:var(--primary); }
 label:has(input[type="radio"]:checked) { border-color:var(--primary) !important; background:#eff6ff !important; }
+
+/* ===== 期日アラートバッジ ===== */
+.date-badge {
+  display:inline-flex; align-items:center; gap:3px;
+  font-size:11px; font-weight:700; padding:2px 7px;
+  border-radius:10px; white-space:nowrap;
+}
+.date-badge.safe    { background:#dcfce7; color:#166534; border:1px solid #86efac; }
+.date-badge.warn    { background:#fef9c3; color:#854d0e; border:1px solid #fde047; }
+.date-badge.orange  { background:#ffedd5; color:#9a3412; border:1px solid #fdba74; }
+.date-badge.danger  { background:#fee2e2; color:#991b1b; border:1px solid #fca5a5; }
+
+/* 画面上部アラートパネル */
+.alert-panel {
+  margin-bottom:14px; background:white; border-radius:10px;
+  box-shadow:var(--shadow); overflow:hidden; display:none;
+}
+.alert-panel.visible { display:block; }
+.alert-panel-header {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:10px 16px; background:#fef3c7; border-bottom:1px solid #fde68a;
+  cursor:pointer;
+}
+.alert-panel-header .alert-title { font-size:13px; font-weight:700; color:#92400e; }
+.alert-panel-header .alert-count { font-size:12px; background:#f59e0b; color:white; padding:2px 8px; border-radius:10px; font-weight:700; }
+.alert-panel-body { padding:10px 16px; max-height:200px; overflow-y:auto; }
+.alert-row {
+  display:flex; align-items:center; gap:8px; padding:6px 0;
+  border-bottom:1px solid #f1f5f9; font-size:12px;
+}
+.alert-row:last-child { border-bottom:none; }
 </style>
 </head>
 <body>
@@ -230,6 +261,18 @@ label:has(input[type="radio"]:checked) { border-color:var(--primary) !important;
     </button>
   </div>
 
+  <!-- 期日アラートパネル -->
+  <div class="alert-panel" id="alertPanel">
+    <div class="alert-panel-header" onclick="toggleAlertPanel()">
+      <span class="alert-title">⚠️ 期日が近い・超過している備品があります</span>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span class="alert-count" id="alertCount">0</span>
+        <span id="alertToggleIcon" style="font-size:12px;color:#92400e;">▼</span>
+      </div>
+    </div>
+    <div class="alert-panel-body" id="alertPanelBody" style="display:none;"></div>
+  </div>
+
   <div id="cardView" class="card-grid"></div>
   <div id="tableView" class="table-wrap hidden">
     <table><thead id="tableHead"></thead><tbody id="tableBody"></tbody></table>
@@ -263,6 +306,10 @@ label:has(input[type="radio"]:checked) { border-color:var(--primary) !important;
           <label>管理番号</label>
           <input type="text" id="f-code">
         </div>
+        <div class="form-group">
+          <label>👤 所有者</label>
+          <input type="text" id="f-owner" placeholder="例：山田 太郎">
+        </div>
         <div class="form-group form-full" id="field-lessor" style="display:none;">
           <label class="lease-label">🏢 リース先</label>
           <input type="text" id="f-lessor" class="lease-field">
@@ -290,16 +337,20 @@ label:has(input[type="radio"]:checked) { border-color:var(--primary) !important;
 
         <div class="form-section">期日管理</div>
         <div class="form-group" id="field-shaken">
-          <label>🚗 車検期日</label>
+          <label>🚗 車検満了日</label>
           <input type="date" id="f-shaken">
         </div>
-        <div class="form-group" id="field-oil">
-          <label>🛢️ オイル交換日</label>
-          <input type="date" id="f-oil">
+        <div class="form-group" id="field-jibaiseki">
+          <label>📋 自賠責期日</label>
+          <input type="date" id="f-jibaiseki">
         </div>
         <div class="form-group" id="field-insurance">
           <label>📅 任意保険期日</label>
           <input type="date" id="f-insurance">
+        </div>
+        <div class="form-group" id="field-oil">
+          <label>🛢️ オイル交換日</label>
+          <input type="date" id="f-oil">
         </div>
         <div class="form-group">
           <label>📅 その他期日①（ラベル）</label>
@@ -539,6 +590,7 @@ function toDbRow(item){
     name:item.name||'',
     category:item.category||'tool',
     code:item.code||'',
+    owner:item.owner||'',
     lessor:item.lessor||'',
     location:item.location||'',
     stock:Number(item.stock)||0,
@@ -547,6 +599,7 @@ function toDbRow(item){
     shaken:item.shaken||null,
     oil:item.oil||null,
     insurance_date:item.insurance||null,
+    jibaiseki:item.jibaiseki||null,
     monthly_lease_fee:Number(item.monthlyLease)||0,
     date1label:item.date1label||'',
     date1:item.date1||null,
@@ -567,6 +620,7 @@ function normalizeRow(row){
     name:row.name||'',
     category:row.category||'tool',
     code:row.code||'',
+    owner:row.owner||'',
     lessor:row.lessor||'',
     location:row.location||'',
     stock:row.stock!=null?Number(row.stock):1,
@@ -575,6 +629,7 @@ function normalizeRow(row){
     shaken:row.shaken||'',
     oil:row.oil||'',
     insurance:row.insurance_date||'',
+    jibaiseki:row.jibaiseki||'',
     monthlyLease:row.monthly_lease_fee||0,
     date1label:row.date1label||'',
     date1:row.date1||'',
@@ -651,6 +706,7 @@ function setTab(tab){
 
 function render(){
   updateLocationFilter();
+  updateAlertPanel();
   if(currentTab==='supplies'){
     renderCardView();
   }else if(currentTab==='archive'){
@@ -689,6 +745,24 @@ function renderCardView(){
   const html=filtered.map(item=>{
     const meta=CAT_META[item.category]||{};
     const hasMemo=item.memo&&item.memo.trim()!=='';
+    // 期日アラートを収集
+    const dateAlerts=[];
+    if(item.shaken){const d=daysUntil(item.shaken);if(d!==null&&d<=60) dateAlerts.push({label:'車検満了日',dateStr:item.shaken,days:d});}
+    if(item.jibaiseki){const d=daysUntil(item.jibaiseki);if(d!==null&&d<=60) dateAlerts.push({label:'自賠責',dateStr:item.jibaiseki,days:d});}
+    if(item.insurance){const d=daysUntil(item.insurance);if(d!==null&&d<=60) dateAlerts.push({label:'任意保険',dateStr:item.insurance,days:d});}
+    if(item.oil){const d=daysUntil(item.oil);if(d!==null&&d<=60) dateAlerts.push({label:'オイル交換',dateStr:item.oil,days:d});}
+    if(item.date1){const d=daysUntil(item.date1);if(d!==null&&d<=60) dateAlerts.push({label:item.date1label||'その他期日',dateStr:item.date1,days:d});}
+    const alertHtml=dateAlerts.map(a=>{
+      let cls,icon;
+      if(a.days<0){cls='danger';icon='🔴';}
+      else if(a.days<=14){cls='orange';icon='🟠';}
+      else if(a.days<=30){cls='warn';icon='🟡';}
+      else{cls='safe';icon='🟢';}
+      return `<div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;font-size:12px;">
+        <span style="color:var(--text-muted);">${a.label}</span>
+        <span class="date-badge ${cls}">${icon} ${a.days<0?Math.abs(a.days)+'日超過':'あと'+a.days+'日'}</span>
+      </div>`;
+    }).join('');
     return `<div class="equip-card">
       <div class="equip-card-header">
         <div class="equip-card-name">${item.name}</div>
@@ -697,7 +771,8 @@ function renderCardView(){
       ${hasMemo?'<div style="font-size:11px;font-weight:700;color:#dc2626;background:#fef2f2;border:1px solid #fecaca;border-radius:4px;padding:4px 8px;margin-bottom:8px;display:inline-flex;align-items:center;gap:4px;">📝 メモ有</div>':''}
       <div class="equip-card-location">📍 ${item.location||'—'}</div>
       <div class="equip-card-stock">${item.stock}</div>
-      <div style="text-align:center;font-size:12px;color:var(--text-muted);margin-bottom:12px;">在庫数</div>
+      <div style="text-align:center;font-size:12px;color:var(--text-muted);margin-bottom:8px;">在庫数</div>
+      ${alertHtml?`<div style="background:#f8fafc;border-radius:6px;padding:6px 8px;margin-bottom:10px;border:1px solid var(--border);">${alertHtml}</div>`:''}
       <div class="equip-card-actions">
         <button class="equip-card-btn primary" onclick="openQuantityChangeModal(${item.id})" style="flex:1.2;">📝 数量変更</button>
         <button class="equip-card-btn" onclick="openHistoryModal(${item.id})" style="flex:0.8;background:#7c3aed;color:white;border-color:#7c3aed;">📊 記録情報</button>
@@ -736,13 +811,12 @@ function renderTableView(){
   document.getElementById('tableView').classList.remove('hidden');
   const cats=currentTab==='all'?Object.keys(CAT_META):[currentTab];
   const filtered=getFilteredData().filter(item=>cats.includes(item.category));
-  const cols=['画像','メモ','名前','区分','保管場所','在庫','状態','貸出先','車検期日','任意保険','月額リース料','アクション'];
+  const cols=['画像','メモ','名前','区分','所有者','保管場所','在庫','状態','貸出先','車検満了日','自賠責期日','任意保険期日','オイル交換日','アクション'];
   document.getElementById('tableHead').innerHTML=`<tr>${cols.map(c=>`<th>${c}</th>`).join('')}</tr>`;
   const tbody=document.getElementById('tableBody');
   tbody.innerHTML=filtered.map(item=>{
     const meta=CAT_META[item.category]||{};
     const hasMemo=item.memo&&item.memo.trim()!=='';
-    // 表示用画像：filesの1枚目 or 旧imageフィールド
     const displayImg=(item.files&&item.files.length>0&&item.files[0].type==='image')?item.files[0].dataUrl:(item.image||'');
     const fileCount=(item.files&&item.files.length>0)?item.files.length:0;
     return `<tr>
@@ -755,13 +829,15 @@ function renderTableView(){
       <td style="text-align:center;">${hasMemo?'<span style="display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:700;color:#dc2626;background:#fef2f2;border:1px solid #fecaca;border-radius:4px;padding:2px 6px;white-space:nowrap;">📝 メモ有</span>':''}</td>
       <td><strong>${item.name}</strong></td>
       <td><span class="badge ${meta.badge}">${meta.label}</span></td>
+      <td>${item.owner||'—'}</td>
       <td>${item.location||'—'}</td>
       <td style="text-align:center;">${item.stock}</td>
       <td><span class="badge ${item.lent?'badge-out':'badge-in'}" style="white-space:nowrap;">${item.lent?'📤 貸出中':'✅ 貸出可'}</span></td>
       <td style="font-size:12px;">${item.lent?`<strong>${item.borrower||'—'}</strong><br><span style="color:var(--text-muted);">返却予定：${item.returnPlan?formatDate(item.returnPlan):'未定'}</span>`:'—'}</td>
-      <td style="font-size:12px;">${item.shaken?item.shaken:'—'}</td>
-      <td style="font-size:12px;">${item.insurance?item.insurance:'—'}</td>
-      <td style="font-size:12px;">${item.monthlyLease?item.monthlyLease.toLocaleString()+'円':'—'}</td>
+      <td style="font-size:12px;">${item.shaken?dateBadgeHtml(item.shaken,'車検'):'—'}</td>
+      <td style="font-size:12px;">${item.jibaiseki?dateBadgeHtml(item.jibaiseki,'自賠責'):'—'}</td>
+      <td style="font-size:12px;">${item.insurance?dateBadgeHtml(item.insurance,'任意保険'):'—'}</td>
+      <td style="font-size:12px;">${item.oil?dateBadgeHtml(item.oil,'オイル交換'):'—'}</td>
       <td>
         <div style="display:flex;gap:4px;flex-wrap:wrap;">
           ${item.lent
@@ -874,7 +950,7 @@ function openModal(id=null){
   document.getElementById('modalTitle').textContent=id?'✏️ 編集':'📦 追加';
   document.getElementById('modalSubmitBtn').textContent='💾 保存';
 
-  ['name','category','code','lessor','location','stock','price','purchaseDate','shaken','oil','insurance','monthlyLease','date1label','date1','memo'].forEach(f=>{
+  ['name','category','code','owner','lessor','location','stock','price','purchaseDate','shaken','jibaiseki','oil','insurance','monthlyLease','date1label','date1','memo'].forEach(f=>{
     const el=document.getElementById('f-'+f.replace(/([A-Z])/g,'-$1').toLowerCase());
     if(el) el.value=item?(item[f]||''):(f==='stock'?'1':'');
   });
@@ -904,6 +980,7 @@ function onCategoryChange(){
   const meta=CAT_META[cat]||{};
   const showShaken=(cat==='heavy_own'||cat==='heavy_lease'||cat==='vehicle_lease');
   document.getElementById('field-shaken').style.display=showShaken?'':'none';
+  document.getElementById('field-jibaiseki').style.display=(meta.isVehicle||meta.isHeavy)?'':'none';
   document.getElementById('field-oil').style.display=(meta.isVehicle||meta.isHeavy)?'':'none';
   document.getElementById('field-insurance').style.display=(meta.isVehicle||meta.isHeavy)?'':'none';
   document.getElementById('field-lessor').style.display=meta.isLease?'':'none';
@@ -928,12 +1005,14 @@ async function saveItem(e){
       name:document.getElementById('f-name').value.trim(),
       category:document.getElementById('f-category').value,
       code:document.getElementById('f-code').value.trim(),
+      owner:document.getElementById('f-owner').value.trim(),
       lessor:document.getElementById('f-lessor').value.trim(),
       location:document.getElementById('f-location').value.trim(),
       stock:parseInt(document.getElementById('f-stock').value)||0,
       price:parseInt(document.getElementById('f-price').value)||0,
       purchaseDate:document.getElementById('f-purchaseDate').value,
       shaken:document.getElementById('f-shaken').value,
+      jibaiseki:document.getElementById('f-jibaiseki').value,
       oil:document.getElementById('f-oil').value,
       insurance:document.getElementById('f-insurance').value,
       monthlyLease:parseInt(document.getElementById('f-monthly-lease').value)||0,
@@ -1076,12 +1155,114 @@ function viewImage(imageData,name){
 }
 
 /* ================================================================
-   ===== 新・ファイルアップロードUI（15枚上限・ドラッグ&ドロップ・PDF対応）=====
+   ===== 期日アラート機能 =====
    ================================================================ */
+
+// 期日までの日数を計算
+function daysUntil(dateStr){
+  if(!dateStr) return null;
+  const today=new Date(); today.setHours(0,0,0,0);
+  const target=new Date(dateStr); target.setHours(0,0,0,0);
+  return Math.floor((target-today)/(1000*60*60*24));
+}
+
+// 期日バッジのHTML生成
+function dateBadgeHtml(dateStr, label){
+  if(!dateStr) return '—';
+  const days=daysUntil(dateStr);
+  const formatted=formatDate(dateStr);
+  let cls='',icon='',text='';
+  if(days===null) return formatted;
+  if(days<0){
+    cls='danger'; icon='🔴';
+    text=`${Math.abs(days)}日超過`;
+  }else if(days<=14){
+    cls='orange'; icon='🟠';
+    text=`あと${days}日`;
+  }else if(days<=30){
+    cls='warn'; icon='🟡';
+    text=`あと${days}日`;
+  }else if(days<=60){
+    cls='safe'; icon='🟢';
+    text=`あと${days}日`;
+  }else{
+    return formatted;
+  }
+  return `<div>${formatted}</div><span class="date-badge ${cls}">${icon} ${text}</span>`;
+}
+
+// アラートパネルを更新
+function updateAlertPanel(){
+  const dateFields=[
+    {key:'shaken',label:'車検満了日'},
+    {key:'jibaiseki',label:'自賠責期日'},
+    {key:'insurance',label:'任意保険期日'},
+    {key:'oil',label:'オイル交換日'},
+    {key:'date1',labelKey:'date1label',label:'その他期日'},
+  ];
+  const alerts=[];
+  data.forEach(item=>{
+    dateFields.forEach(f=>{
+      const dateStr=item[f.key];
+      if(!dateStr) return;
+      const days=daysUntil(dateStr);
+      if(days===null||days>60) return;
+      const fieldLabel=f.labelKey?(item[f.labelKey]||f.label):f.label;
+      let level,icon,text;
+      if(days<0){level='danger';icon='🔴';text=`${Math.abs(days)}日超過`;}
+      else if(days<=14){level='orange';icon='🟠';text=`あと${days}日`;}
+      else if(days<=30){level='warn';icon='🟡';text=`あと${days}日`;}
+      else{level='safe';icon='🟢';text=`あと${days}日`;}
+      alerts.push({name:item.name,fieldLabel,dateStr,days,level,icon,text});
+    });
+  });
+
+  // 緊急度順にソート（日数が少ない順）
+  alerts.sort((a,b)=>a.days-b.days);
+
+  const panel=document.getElementById('alertPanel');
+  const body=document.getElementById('alertPanelBody');
+  const count=document.getElementById('alertCount');
+
+  if(alerts.length===0){
+    panel.classList.remove('visible');
+    return;
+  }
+  panel.classList.add('visible');
+  count.textContent=alerts.length;
+
+  body.innerHTML=alerts.map(a=>`
+    <div class="alert-row">
+      <span style="font-size:16px;">${a.icon}</span>
+      <strong style="min-width:120px;flex-shrink:0;">${a.name}</strong>
+      <span style="color:var(--text-muted);min-width:80px;flex-shrink:0;">${a.fieldLabel}</span>
+      <span>${formatDate(a.dateStr)}</span>
+      <span class="date-badge ${a.level}" style="margin-left:auto;">${a.icon} ${a.text}</span>
+    </div>
+  `).join('');
+}
+
+function toggleAlertPanel(){
+  const body=document.getElementById('alertPanelBody');
+  const icon=document.getElementById('alertToggleIcon');
+  const isOpen=body.style.display!=='none';
+  body.style.display=isOpen?'none':'block';
+  icon.textContent=isOpen?'▼':'▲';
+}
+
+// ================================================================
 function initFileUpload(){
   const dropZone=document.getElementById('dropZone');
   const fileInput=document.getElementById('fileInput');
   if(!dropZone||!fileInput) return;
+
+  // cloneNodeで古いイベントを完全リセット（重複登録防止）
+  const newInput=fileInput.cloneNode(true);
+  fileInput.parentNode.replaceChild(newInput,fileInput);
+  newInput.addEventListener('change',()=>{
+    processUploadFiles([...newInput.files]);
+    newInput.value='';
+  });
 
   dropZone.addEventListener('dragover',e=>{
     e.preventDefault();
@@ -1102,10 +1283,7 @@ function initFileUpload(){
     if(attachedFiles.length>=MAX_FILES) return;
     processUploadFiles([...e.dataTransfer.files]);
   });
-  fileInput.addEventListener('change',()=>{
-    processUploadFiles([...fileInput.files]);
-    fileInput.value='';
-  });
+  // changeイベントはinitFileUpload内のcloneNodeで登録済み
 }
 
 function processUploadFiles(files){
@@ -1188,9 +1366,15 @@ function renderFileUpload(){
   });
 }
 
-// モーダルが開いたときにドラッグ&ドロップを初期化
+// ファイルアップロード初期化（1回だけ）
+let fileUploadInited=false;
+function ensureFileUploadInit(){
+  if(fileUploadInited) return;
+  fileUploadInited=true;
+  initFileUpload();
+}
 document.getElementById('modal').addEventListener('transitionend',function(e){
-  if(this.classList.contains('active')) initFileUpload();
+  if(e.propertyName==='opacity'&&this.classList.contains('active')) ensureFileUploadInit();
 });
 
 init();

@@ -240,7 +240,7 @@ tr.archived-row td img { filter:grayscale(80%); opacity:0.6; }
 }
 .file-viewer-overlay.active { opacity:1; pointer-events:all; }
 .file-viewer-nav {
-  display:flex; align-items:center; gap:16px; margin-bottom:12px;
+  display:flex; align-items:center; gap:16px; margin-bottom:12px; flex-wrap:wrap; justify-content:center;
 }
 .fv-btn {
   background:rgba(255,255,255,0.15); border:none; color:white;
@@ -250,6 +250,14 @@ tr.archived-row td img { filter:grayscale(80%); opacity:0.6; }
 }
 .fv-btn:hover { background:rgba(255,255,255,0.3); }
 .fv-btn:disabled { opacity:0.3; cursor:not-allowed; }
+/* ダウンロードボタン */
+.fv-download-btn {
+  background:rgba(74,144,217,0.85); border:none; color:white;
+  padding:8px 16px; border-radius:8px; cursor:pointer;
+  font-size:13px; font-weight:700; display:flex; align-items:center; gap:6px;
+  transition:background .15s; white-space:nowrap;
+}
+.fv-download-btn:hover { background:rgba(74,144,217,1); }
 .fv-counter { color:white; font-size:13px; min-width:60px; text-align:center; }
 
 /* ===== 期日アラートバッジ ===== */
@@ -387,6 +395,8 @@ tr.archived-row td img { filter:grayscale(80%); opacity:0.6; }
     <span id="fvScaleLabel" style="color:white;font-size:12px;min-width:42px;text-align:center;">100%</span>
     <button class="fv-btn" onclick="fvZoom(-0.2)" title="縮小" style="font-size:14px;width:36px;height:36px;">－</button>
     <button class="fv-btn" onclick="fvScale=1;fvTranslate={x:0,y:0};applyFvTransform();document.getElementById('fvScaleLabel').textContent='100%';" title="リセット" style="font-size:11px;width:48px;height:36px;">リセット</button>
+    <!-- ★修正① ダウンロードボタン追加 -->
+    <button class="fv-download-btn" id="fvDownloadBtn" onclick="downloadCurrentFile()">⬇️ ダウンロード</button>
   </div>
   <div id="fvContent" style="max-width:90vw;max-height:75vh;display:flex;align-items:center;justify-content:center;overflow:hidden;"></div>
   <div id="fvName" style="color:#aaa;font-size:13px;margin-top:8px;"></div>
@@ -620,9 +630,11 @@ tr.archived-row td img { filter:grayscale(80%); opacity:0.6; }
         <textarea id="f-usageMemo" rows="2" placeholder="例：現場Aで使用 / 新規購入"></textarea>
       </div>
     </div>
+    <!-- ★修正② 保存中インジケーター追加 -->
+    <div id="usageSavingMsg" style="display:none;text-align:center;padding:8px;color:#1e40af;font-size:13px;font-weight:700;">⏳ 保存中...</div>
     <div class="modal-footer">
-      <button class="btn-cancel" onclick="closeUsageModal()">キャンセル</button>
-      <button class="btn-primary" onclick="saveQuantityChange()">✅ 記録する</button>
+      <button class="btn-cancel" onclick="closeUsageModal()" id="usageCancelBtn">キャンセル</button>
+      <button class="btn-primary" onclick="saveQuantityChange()" id="usageSaveBtn">✅ 記録する</button>
     </div>
   </div>
 </div>
@@ -651,11 +663,11 @@ let currentTab='all';
 let editingId=null;
 let usageItemId=null;
 let sortKey='';
-let sortDir=1; // 1=昇順 -1=降順
+let sortDir=1;
 
-/* ===== 新・ファイル管理変数 ===== */
+/* ===== ファイル管理変数 ===== */
 const MAX_FILES=15;
-let attachedFiles=[]; // { id, file, dataUrl, type:'image'|'pdf' }
+let attachedFiles=[];
 
 const CAT_META={
   supplies:{label:'📦 事務・現場備品',badge:'badge-supplies',isHeavy:false,isVehicle:false,isLease:false},
@@ -677,7 +689,10 @@ async function sbFetch(path,options={}){
       ...options.headers,
     },
   });
-  if(!res.ok) throw new Error(res.statusText);
+  if(!res.ok){
+    const errText=await res.text().catch(()=>res.statusText);
+    throw new Error(`${res.status} ${res.statusText}: ${errText}`);
+  }
   const text=await res.text();
   return text?JSON.parse(text):null;
 }
@@ -701,15 +716,21 @@ async function deleteRow(id){
   await sbFetch(`${TABLE}?id=eq.${id}`,{method:'DELETE'});
 }
 
+// ★修正③ logUsage: change_type カラム除去・try/catch付き・戻り値あり
 async function logUsage(equipId,userName,qty,remaining,usedAt,memo){
-  await sbFetch(USAGE_TABLE,{method:'POST',body:JSON.stringify({
+  const payload={
     equipment_id:equipId,
     user_name:userName,
     quantity:qty,
     remaining:remaining,
     used_at:usedAt||new Date().toISOString(),
-    memo:memo||'',
-  })});
+    memo:memo||null,
+  };
+  await sbFetch(USAGE_TABLE,{
+    method:'POST',
+    prefer:'return=minimal',
+    body:JSON.stringify(payload),
+  });
 }
 
 function toDbRow(item){
@@ -831,7 +852,7 @@ async function init(){
 
 function setTab(tab){
   currentTab=tab;
-  sortKey=''; sortDir=1; // タブ切替時にソートリセット
+  sortKey=''; sortDir=1;
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
   document.getElementById('tab-'+tab).classList.add('active');
   render();
@@ -871,12 +892,8 @@ function getFilteredData(){
   if(lendStatus==='available') filtered=filtered.filter(item=>!item.lent);
   else if(lendStatus==='lent') filtered=filtered.filter(item=>item.lent);
 
-  // ソート（アーカイブ済みは常に下に固定）
   filtered=[...filtered].sort((a,b)=>{
-    // アーカイブ済みを常に下へ
     if(!!a.archived !== !!b.archived) return a.archived?1:-1;
-
-    // ソートキーがあれば適用
     if(sortKey){
       let va=a[sortKey]||'', vb=b[sortKey]||'';
       if(typeof va==='number'||typeof vb==='number'){
@@ -887,7 +904,6 @@ function getFilteredData(){
     }
     return 0;
   });
-
   return filtered;
 }
 
@@ -910,7 +926,6 @@ function renderCardView(){
   const html=filtered.map(item=>{
     const meta=CAT_META[item.category]||{};
     const hasMemo=item.memo&&item.memo.trim()!=='';
-    // 期日アラートを収集
     const dateAlerts=[];
     if(item.shaken){const d=daysUntil(item.shaken);if(d!==null&&d<=60) dateAlerts.push({label:'車検満了日',dateStr:item.shaken,days:d});}
     if(item.jibaiseki){const d=daysUntil(item.jibaiseki);if(d!==null&&d<=60) dateAlerts.push({label:'自賠責',dateStr:item.jibaiseki,days:d});}
@@ -975,7 +990,6 @@ function renderTableView(){
   document.getElementById('cardView').style.display='none';
   document.getElementById('tableView').classList.remove('hidden');
   const cats=currentTab==='all'?Object.keys(CAT_META):[currentTab];
-  // 通常タブではアーカイブ済みも含めて表示（グレー表示）、archivedタブは専用
   const filtered=getFilteredData().filter(item=>cats.includes(item.category));
 
   document.getElementById('tableHead').innerHTML=`<tr>
@@ -1043,7 +1057,7 @@ function renderTableView(){
     </tr>`;
   }).join('');
   if(filtered.length===0){
-    tbody.innerHTML='<tr><td colspan="12" style="text-align:center;padding:40px;color:var(--text-muted);">該当する備品がありません</td></tr>';
+    tbody.innerHTML='<tr><td colspan="14" style="text-align:center;padding:40px;color:var(--text-muted);">該当する備品がありません</td></tr>';
   }
 }
 
@@ -1053,7 +1067,6 @@ function formatDate(s){
   return `${y}/${m}/${d}`;
 }
 
-// 🗂️ アーカイブタブ（tool/重機/車両のアーカイブ済み一覧）
 function renderArchivedView(){
   document.getElementById('cardView').style.display='none';
   document.getElementById('tableView').classList.remove('hidden');
@@ -1111,6 +1124,10 @@ function openQuantityChangeModal(id){
   document.getElementById('f-usageTime').value=now.toTimeString().slice(0,5);
   document.getElementById('f-usageMemo').value='';
   onChangeTypeChange();
+  // ボタン状態リセット
+  document.getElementById('usageSaveBtn').disabled=false;
+  document.getElementById('usageSaveBtn').textContent='✅ 記録する';
+  document.getElementById('usageSavingMsg').style.display='none';
   document.getElementById('usageModal').classList.add('active');
 }
 
@@ -1120,24 +1137,64 @@ function onChangeTypeChange(){
   document.getElementById('f-userName').placeholder=isMinus?'例：田中 太郎':'例：山田 花子';
 }
 
+// ★修正④ saveQuantityChange: try/catch・ボタン制御・詳細エラー表示
 async function saveQuantityChange(){
   const userName=document.getElementById('f-userName').value.trim();
   const isMinus=document.getElementById('type-minus').checked;
   let qty=parseInt(document.getElementById('f-qtyChange').value)||1;
+  if(qty<=0){alert('変更個数は1以上を入力してください');return;}
   if(isMinus) qty=-qty;
   const usageDate=document.getElementById('f-usageDate').value;
   const usageTime=document.getElementById('f-usageTime').value;
   const memo=document.getElementById('f-usageMemo').value.trim();
   if(!userName){alert(isMinus?'使用者名を入力してください':'追加者名を入力してください');return;}
+
   let usedAt=new Date().toISOString();
-  if(usageDate){usedAt=usageTime?new Date(usageDate+'T'+usageTime).toISOString():new Date(usageDate).toISOString();}
-  const item=data.find(d=>d.id===usageItemId);
-  const newStock=Math.max(0,item.stock+qty);
-  await logUsage(usageItemId,userName,qty,newStock,usedAt,memo);
-  item.stock=newStock;
-  await updateRow(item);
-  closeUsageModal();
-  render();
+  if(usageDate){
+    usedAt=usageTime
+      ? new Date(usageDate+'T'+usageTime+':00').toISOString()
+      : new Date(usageDate+'T00:00:00').toISOString();
+  }
+
+  const saveBtn=document.getElementById('usageSaveBtn');
+  const cancelBtn=document.getElementById('usageCancelBtn');
+  const savingMsg=document.getElementById('usageSavingMsg');
+  saveBtn.disabled=true;
+  saveBtn.textContent='⏳ 保存中...';
+  cancelBtn.disabled=true;
+  savingMsg.style.display='block';
+
+  try{
+    const item=data.find(d=>d.id===usageItemId);
+    if(!item){throw new Error('備品データが見つかりません');}
+
+    const newStock=Math.max(0, item.stock+qty);
+
+    // まず在庫数を更新
+    item.stock=newStock;
+    await updateRow(item);
+
+    // 次にログを記録（失敗しても在庫更新は保持）
+    try{
+      await logUsage(usageItemId, userName, qty, newStock, usedAt, memo||null);
+    }catch(logErr){
+      console.warn('使用ログの記録に失敗しました（在庫更新は成功）:', logErr);
+      // ログ失敗は警告のみ（在庫は保存済み）
+    }
+
+    closeUsageModal();
+    render();
+  }catch(err){
+    console.error('数量変更エラー:', err);
+    alert(`保存に失敗しました。\n\nエラー: ${err.message}\n\nSupabase接続を確認してください。`);
+    // 失敗時はデータを再読み込みして整合性確保
+    try{ await loadData(); render(); }catch(e){}
+  }finally{
+    saveBtn.disabled=false;
+    saveBtn.textContent='✅ 記録する';
+    cancelBtn.disabled=false;
+    savingMsg.style.display='none';
+  }
 }
 
 async function openHistoryModal(id){
@@ -1148,7 +1205,7 @@ async function openHistoryModal(id){
     const logs=await sbFetch(`${USAGE_TABLE}?equipment_id=eq.${id}&order=used_at.desc&select=*`);
     renderHistory(logs||[]);
   }catch(e){
-    document.getElementById('historyContent').innerHTML=`<p style="text-align:center;color:var(--danger);padding:40px;">❌ 履歴の読み込みに失敗しました</p>`;
+    document.getElementById('historyContent').innerHTML=`<p style="text-align:center;color:var(--danger);padding:40px;">❌ 履歴の読み込みに失敗しました<br><small>${e.message}</small></p>`;
   }
 }
 
@@ -1180,7 +1237,9 @@ function renderHistory(logs){
   document.getElementById('historyContent').innerHTML=html;
 }
 
-function closeUsageModal(){document.getElementById('usageModal').classList.remove('active');}
+function closeUsageModal(){
+  document.getElementById('usageModal').classList.remove('active');
+}
 
 function openModal(id=null){
   editingId=id;
@@ -1193,13 +1252,11 @@ function openModal(id=null){
     if(el) el.value=item?(item[f]||''):(f==='stock'?'1':'');
   });
 
-  // アーカイブフィールド
   const archivedCb=document.getElementById('f-archived');
   const archiveReasonEl=document.getElementById('f-archive-reason');
   archivedCb.checked=!!(item&&item.archived);
   archiveReasonEl.value=(item&&item.archiveReason)||'';
 
-  // ファイルリセット＆既存データ読み込み
   attachedFiles=[];
   if(item&&item.files&&item.files.length>0){
     attachedFiles=item.files.map((f,i)=>({
@@ -1228,7 +1285,6 @@ function onCategoryChange(){
   document.getElementById('field-insurance').style.display=(meta.isVehicle||meta.isHeavy)?'':'none';
   document.getElementById('field-lessor').style.display=meta.isLease?'':'none';
   document.getElementById('field-monthly-lease').style.display=meta.isLease?'':'none';
-  // アーカイブセクションは tool/heavy_own/heavy_lease/vehicle_own/vehicle_lease のみ表示
   const showArchive=['tool','heavy_own','heavy_lease','vehicle_own','vehicle_lease'].includes(cat);
   document.getElementById('field-archive-section').style.display=showArchive?'':'none';
   document.getElementById('field-archive-wrap').style.display=showArchive?'':'none';
@@ -1247,7 +1303,6 @@ async function saveItem(e){
   btn.textContent='⏳ 保存中...';
   btn.disabled=true;
   try{
-    // attachedFiles を保存用フォーマットに変換
     const filesToSave=attachedFiles.map(f=>({
       name:f.file.name,
       dataUrl:f.dataUrl,
@@ -1397,7 +1452,6 @@ let galleryFiles=[];
 function openGallery(itemId){
   const item=data.find(d=>d.id===itemId);
   if(!item) return;
-  // filesがあればそちら優先、なければ旧imageフィールド
   const files=(item.files&&item.files.length>0)
     ? item.files
     : (item.image?[{name:'image.jpg',dataUrl:item.image,type:'image'}]:[]);
@@ -1417,7 +1471,10 @@ function openGallery(itemId){
         </div>
         <div class="gc-info">
           <span>${shortName}</span>
-          <span class="gc-num">${i+1}</span>
+          <div style="display:flex;align-items:center;gap:4px;">
+            <button onclick="event.stopPropagation();downloadFile(${i})" style="background:#4a90d9;border:none;color:white;font-size:10px;font-weight:bold;padding:2px 7px;border-radius:6px;cursor:pointer;">⬇️</button>
+            <span class="gc-num">${i+1}</span>
+          </div>
         </div>
       </div>`;
     }else{
@@ -1425,7 +1482,10 @@ function openGallery(itemId){
         <img class="gc-thumb" src="${f.dataUrl}" alt="${f.name||'画像'}">
         <div class="gc-info">
           <span>${(f.name||'画像').length>16?(f.name||'画像').slice(0,14)+'…':(f.name||'画像')}</span>
-          <span class="gc-num">${i+1}</span>
+          <div style="display:flex;align-items:center;gap:4px;">
+            <button onclick="event.stopPropagation();downloadFile(${i})" style="background:#4a90d9;border:none;color:white;font-size:10px;font-weight:bold;padding:2px 7px;border-radius:6px;cursor:pointer;">⬇️</button>
+            <span class="gc-num">${i+1}</span>
+          </div>
         </div>
       </div>`;
     }
@@ -1437,7 +1497,7 @@ function closeGallery(){
   document.getElementById('galleryOverlay').classList.remove('active');
 }
 
-// ── ファイル拡大表示（前後ナビ付き）──
+// ── ファイル拡大表示 ──
 let fvIndex=0;
 let fvScale=1;
 let fvDragStart=null;
@@ -1471,6 +1531,25 @@ function fvZoom(delta){
 function applyFvTransform(){
   const img=document.querySelector('#fvContent img');
   if(img) img.style.transform=`scale(${fvScale}) translate(${fvTranslate.x/fvScale}px,${fvTranslate.y/fvScale}px)`;
+}
+
+// ★修正⑤ 現在表示中のファイルをダウンロード
+function downloadCurrentFile(){
+  downloadFile(fvIndex);
+}
+
+function downloadFile(index){
+  const f=galleryFiles[index];
+  if(!f) return;
+  const a=document.createElement('a');
+  a.href=f.dataUrl;
+  // ファイル名を設定（画像の場合は拡張子を推定）
+  let fileName=f.name||'file';
+  if(!fileName.includes('.')&&f.type==='image') fileName+='.jpg';
+  a.download=fileName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
 }
 
 function renderFileViewer(){
@@ -1516,13 +1595,11 @@ function renderFileViewer(){
     img.style.cssText='max-width:85vw;max-height:72vh;border-radius:8px;box-shadow:0 8px 32px rgba(0,0,0,0.6);object-fit:contain;transition:transform .15s;cursor:grab;user-select:none;';
     img.draggable=false;
 
-    // マウスホイールでズーム
     img.addEventListener('wheel',e=>{
       e.preventDefault();
       fvZoom(e.deltaY<0?0.15:-0.15);
     },{passive:false});
 
-    // ドラッグで移動
     img.addEventListener('mousedown',e=>{
       fvDragStart={x:e.clientX-fvTranslate.x,y:e.clientY-fvTranslate.y};
       img.style.cursor='grabbing';
@@ -1534,7 +1611,6 @@ function renderFileViewer(){
     });
     window.addEventListener('mouseup',()=>{fvDragStart=null;if(img) img.style.cursor='grab';});
 
-    // ピンチズーム（スマホ）
     let lastDist=0;
     img.addEventListener('touchstart',e=>{
       if(e.touches.length===2){
@@ -1554,15 +1630,7 @@ function renderFileViewer(){
   }
 }
 
-function downloadFile(index){
-  const f=galleryFiles[index];
-  const a=document.createElement('a');
-  a.href=f.dataUrl;
-  a.download=f.name||'file.pdf';
-  a.click();
-}
-
-// キーボード操作（←→で前後移動、Escで閉じる）
+// キーボード操作
 document.addEventListener('keydown',e=>{
   const fv=document.getElementById('fileViewerOverlay');
   const gl=document.getElementById('galleryOverlay');
@@ -1576,7 +1644,6 @@ document.addEventListener('keydown',e=>{
 });
 
 function viewImage(imageData,name){
-  // 後方互換性のため残す（旧コードから呼ばれる場合）
   galleryFiles=[{name,dataUrl:imageData,type:'image'}];
   fvIndex=0;
   renderFileViewer();
@@ -1587,7 +1654,6 @@ function viewImage(imageData,name){
    ===== 期日アラート機能 =====
    ================================================================ */
 
-// 期日までの日数を計算
 function daysUntil(dateStr){
   if(!dateStr) return null;
   const today=new Date(); today.setHours(0,0,0,0);
@@ -1595,7 +1661,6 @@ function daysUntil(dateStr){
   return Math.floor((target-today)/(1000*60*60*24));
 }
 
-// 期日バッジのHTML生成
 function dateBadgeHtml(dateStr, label){
   if(!dateStr) return '—';
   const days=daysUntil(dateStr);
@@ -1620,7 +1685,6 @@ function dateBadgeHtml(dateStr, label){
   return `<div>${formatted}</div><span class="date-badge ${cls}">${icon} ${text}</span>`;
 }
 
-// アラートパネルを更新
 function updateAlertPanel(){
   const dateFields=[
     {key:'shaken',label:'車検満了日'},
@@ -1646,7 +1710,6 @@ function updateAlertPanel(){
     });
   });
 
-  // 緊急度順にソート（日数が少ない順）
   alerts.sort((a,b)=>a.days-b.days);
 
   const panel=document.getElementById('alertPanel');
@@ -1685,7 +1748,6 @@ function initFileUpload(){
   const fileInput=document.getElementById('fileInput');
   if(!dropZone||!fileInput) return;
 
-  // cloneNodeで古いイベントを完全リセット（重複登録防止）
   const newInput=fileInput.cloneNode(true);
   fileInput.parentNode.replaceChild(newInput,fileInput);
   newInput.addEventListener('change',()=>{
@@ -1712,7 +1774,6 @@ function initFileUpload(){
     if(attachedFiles.length>=MAX_FILES) return;
     processUploadFiles([...e.dataTransfer.files]);
   });
-  // changeイベントはinitFileUpload内のcloneNodeで登録済み
 }
 
 function processUploadFiles(files){
@@ -1795,7 +1856,6 @@ function renderFileUpload(){
   });
 }
 
-// ファイルアップロード初期化（1回だけ）
 let fileUploadInited=false;
 function ensureFileUploadInit(){
   if(fileUploadInited) return;
